@@ -1,17 +1,100 @@
 #include <stdio.h>
+#include <math.h>
+#include <algorithm>
 #include <QtCore>
 
-void print_branch_end(const char* texture, const char* scale)
+using namespace std;
+
+class Node {
+public:
+    Node(): x(0), y(0), z(0), r(1) {}
+    Node(float x_, float y_, float z_, float r_): x(x_), y(y_), z(z_), r(r_) {}
+    void print() const
+    {
+        printf("    <%f, %f, %f>, %f\n", x, y, z, r);
+    }
+
+public:
+    float x;
+    float y;
+    float z;
+    float r;
+};
+
+class Branch {
+public:
+    bool empty() const { return nodeList.empty(); }
+    void append(const Node& node) { nodeList.append(node); }
+    void clear() { nodeList.clear(); }
+    void print(const char* spline_method, const char* texture, const char* scale, float threshold=0.0) const;
+
+private:
+    QVector<Node> simplify(float threshold) const;
+    void simplify(const QVector<Node>& nodes, const QVector<float>& thetas, int beg, int end, float threshold, QVector<Node>& res) const;
+    void print(const QVector<Node>& nodes, const char* spline_method, const char* texture, const char* scale) const;
+    
+private:
+    QVector<Node> nodeList;
+};
+
+float calculateTheta(const Node& first, const Node& second)
 {
+    float x = second.x - first.x;
+    float y = second.y - first.y;
+    float z = second.z - first.z;
+    float res = acos(z / sqrt(x * x + y * y + z * z));
+    return res;
+}
+
+void Branch::simplify(const QVector<Node>& nodes, const QVector<float>& thetas, int beg, int end, float threshold, QVector<Node>& res) const
+{
+    if (beg + 1 == end) {
+        res.append(nodes[beg]);
+        return;
+    }
+    if (*max_element(thetas.begin() + beg, thetas.begin() + end) - *min_element(thetas.begin() + beg, thetas.begin() + end) < threshold) {
+        res.append(nodes[beg]);
+        return;
+    }
+    int mid = (beg + end) / 2;
+    simplify(nodes, thetas, beg, mid, threshold, res);
+    simplify(nodes, thetas, mid, end, threshold, res);
+}
+
+QVector<Node> Branch::simplify(float threshold) const
+{
+    QVector<Node> nodes;
+    QVector<float> thetas;
+    for (int i = 0; i < nodeList.size() - 1; ++i)
+        thetas.append(calculateTheta(nodeList[i], nodeList[i + 1]));
+    simplify(nodeList, thetas, 0, thetas.size(), threshold, nodes);
+    nodes.append(nodeList.last());
+    return nodes;
+}
+
+void Branch::print(const char* spline_method, const char* texture, const char* scale, float threshold) const
+{
+    QVector<Node> simpNodeList = simplify(threshold);
+    print(simpNodeList, spline_method, texture, scale);
+}
+
+void Branch::print(const QVector<Node>& nodes, const char* spline_method, const char* texture, const char* scale) const
+{
+    printf("sphere_sweep {\n");
+    printf("    %s_spline\n", spline_method);
+    printf("    %d,\n", nodes.size());
+    foreach (const Node& node, nodes) 
+        node.print();
     printf("    pigment { image_map {\"%s\"} scale %s }\n", texture, scale);
     printf("    finish {ambient 0.8 diffuse 0.8 phong 0.2}\n");
     printf("}\n\n");
 }
 
+
 int main(int argc, char* argv[])
 {
-    if (argc != 5) {
-        printf("Usage: brc2pov.exe filename.brc cubic[linear] texture.jpg scale");
+    if (argc != 6) {
+        printf("Usage: brc2pov.exe filename.brc cubic[linear] texture.jpg scale simp_threshold");
         exit(-1);
     }
 
@@ -20,29 +103,25 @@ int main(int argc, char* argv[])
         printf("Can not open brc file %s", argv[1]);
         exit(-2);
     }
+
+    Branch branch;
     QTextStream in(&brcfile);
-    bool file_begin = true;
     while (!in.atEnd()) {
         QStringList items = in.readLine().split(QRegExp("\\s+"), QString::SkipEmptyParts);
         if (items.empty())
             continue;
         if (items[0] == "g") {
-            if (!file_begin) {
-                print_branch_end(argv[3], argv[4]);
+            if (!branch.empty()) {
+                branch.print(argv[2], argv[3], argv[4], QString(argv[5]).toFloat());
             }
-            if (file_begin) {
-                file_begin = false;
-            }
-            printf("sphere_sweep {\n");
-            printf("    %s_spline\n", argv[2]);
-        }
-        if (items[0] == "p") {
-            printf("    %d,\n", items[4].toInt());
+            branch.clear();
         }
         if (items[0] == "v") {
-            printf("    <%f, %f, %f>, %f\n", items[1].toFloat(), items[2].toFloat(), items[3].toFloat(), items[4].toFloat());
+            branch.append(Node(items[1].toFloat(), items[2].toFloat(), items[3].toFloat(), items[4].toFloat()));
         }
     }
-    print_branch_end(argv[3], argv[4]);
+    branch.print(argv[2], argv[3], argv[4], QString(argv[5]).toFloat());
+
+    brcfile.close();
     return 0;
 }
